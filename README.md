@@ -1,2 +1,0 @@
-# KogulGITPOC
-GITHub POC 
