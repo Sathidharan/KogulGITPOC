@@ -1,0 +1,83 @@
+{
+	"name": "EmployeeDataFlow",
+	"properties": {
+		"type": "MappingDataFlow",
+		"typeProperties": {
+			"sources": [
+				{
+					"dataset": {
+						"referenceName": "EmployeeCsv_Input",
+						"type": "DatasetReference"
+					},
+					"name": "EmployeeInputSource"
+				},
+				{
+					"dataset": {
+						"referenceName": "Employee_Cleansed",
+						"type": "DatasetReference"
+					},
+					"name": "EmployeeDB"
+				}
+			],
+			"sinks": [
+				{
+					"dataset": {
+						"referenceName": "Employee_Cleansed",
+						"type": "DatasetReference"
+					},
+					"name": "LoadNewData"
+				},
+				{
+					"dataset": {
+						"referenceName": "Employee_Cleansed",
+						"type": "DatasetReference"
+					},
+					"name": "ModifyExistingData"
+				},
+				{
+					"dataset": {
+						"referenceName": "Employee_Cleansed",
+						"type": "DatasetReference"
+					},
+					"name": "LoadModifiedData"
+				}
+			],
+			"transformations": [
+				{
+					"name": "DataConversion"
+				},
+				{
+					"name": "TypeConversion"
+				},
+				{
+					"name": "LookupDS"
+				},
+				{
+					"name": "RenameColumns"
+				},
+				{
+					"name": "ConditionalSplit"
+				},
+				{
+					"name": "SetAttribute"
+				},
+				{
+					"name": "Exists1"
+				},
+				{
+					"name": "SelectColumnsforCheck"
+				},
+				{
+					"name": "SetAttributeModification"
+				},
+				{
+					"name": "AlterRowData"
+				},
+				{
+					"name": "SetAttributeInsertion"
+				}
+			],
+			"script": "source(output(\n\t\tEmployee_ID as string,\n\t\tName as string,\n\t\tMobile_Number as string\n\t),\n\tallowSchemaDrift: true,\n\tvalidateSchema: false) ~> EmployeeInputSource\nsource(output(\n\t\tEmployee_ID as integer,\n\t\tName as string,\n\t\tMobile as decimal(10,0),\n\t\tDate_Of_Joining as string,\n\t\tisCurrent as string,\n\t\tprocessedTime as timestamp,\n\t\tSurrogate_Key as integer\n\t),\n\tallowSchemaDrift: true,\n\tvalidateSchema: false,\n\tisolationLevel: 'READ_UNCOMMITTED',\n\tformat: 'table',\n\tpartitionBy('hash', 1)) ~> EmployeeDB\nEmployeeInputSource derive(Joining_Date = trim(right(Name, 12),'()'),\n\t\tName = upper(toString(left(Name, length(Name)-12)))) ~> DataConversion\nEmployeeDB derive(Employee_ID = toString(Employee_ID),\n\t\tMobile = toString(Mobile)) ~> TypeConversion\nDataConversion, TypeConversion lookup(EmployeeInputSource@Employee_ID == TypeConversion@Employee_ID,\n\tmultiple: false,\n\tpickup: 'any',\n\tbroadcast: 'none')~> LookupDS\nLookupDS select(mapColumn(\n\t\tEmployee_ID = {EmployeeInputSource@Employee_ID},\n\t\tName = {DataConversion@Name},\n\t\tMobile_Number,\n\t\tJoining_Date,\n\t\t{db@Employee_ID} = {TypeConversion@Employee_ID},\n\t\t{db@Name} = {EmployeeDB@Name},\n\t\t{db@Mobile} = Mobile,\n\t\t{db@Date_Of_Joining} = Date_Of_Joining,\n\t\tisCurrent,\n\t\tprocessedTime,\n\t\t{db@Surrogate_Key} = Surrogate_Key\n\t),\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true) ~> RenameColumns\nRenameColumns split(isNull(isCurrent),\n\tdisjoint: false,\n\tpartitionBy('hash', 1)) ~> ConditionalSplit@(NewRecord, CheckForChanges)\nConditionalSplit@NewRecord derive(isCurrent = 'Y',\n\t\tprocessedTime = currentTimestamp()) ~> SetAttribute\nSelectColumnsforCheck, TypeConversion exists(csvEmployee_ID == Employee_ID &&\r\n(\r\ncsvName != Name ||\r\ncsvMobile_Number != Mobile ||\r\ncsvJoining_Date != Date_Of_Joining\r\n),\n\tnegate:false,\n\tbroadcast: 'none')~> Exists1\nConditionalSplit@CheckForChanges select(mapColumn(\n\t\tcsvEmployee_ID = Employee_ID,\n\t\tcsvName = Name,\n\t\tcsvMobile_Number = Mobile_Number,\n\t\tcsvJoining_Date = Joining_Date,\n\t\tisCurrent,\n\t\tprocessedTime,\n\t\t{db@Surrogate_Key}\n\t),\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true) ~> SelectColumnsforCheck\nExists1 derive(isCurrent = 'N',\n\t\tprocessedTime = currentTimestamp()) ~> SetAttributeModification\nSetAttributeModification alterRow(updateIf(true())) ~> AlterRowData\nExists1 derive(isCurrent = 'Y',\n\t\tprocessedTime = currentTimestamp()) ~> SetAttributeInsertion\nSetAttribute sink(input(\n\t\tEmployee_ID as integer,\n\t\tName as string,\n\t\tMobile as decimal(10,0),\n\t\tDate_Of_Joining as string,\n\t\tisCurrent as string,\n\t\tprocessedTime as timestamp,\n\t\tSurrogate_Key as integer\n\t),\n\tallowSchemaDrift: true,\n\tvalidateSchema: false,\n\tdeletable:false,\n\tinsertable:true,\n\tupdateable:false,\n\tupsertable:false,\n\tformat: 'table',\n\tmapColumn(\n\t\tEmployee_ID,\n\t\tName,\n\t\tMobile = Mobile_Number,\n\t\tDate_Of_Joining = Joining_Date,\n\t\tisCurrent,\n\t\tprocessedTime\n\t),\n\tpartitionBy('hash', 1),\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true) ~> LoadNewData\nAlterRowData sink(input(\n\t\tEmployee_ID as integer,\n\t\tName as string,\n\t\tMobile as decimal(10,0),\n\t\tDate_Of_Joining as string,\n\t\tisCurrent as string,\n\t\tprocessedTime as timestamp,\n\t\tSurrogate_Key as integer\n\t),\n\tallowSchemaDrift: true,\n\tvalidateSchema: false,\n\tdeletable:false,\n\tinsertable:false,\n\tupdateable:true,\n\tupsertable:false,\n\tkeys:['Employee_ID','Surrogate_Key'],\n\tskipKeyWrites:true,\n\tformat: 'table',\n\tmapColumn(\n\t\tisCurrent,\n\t\tprocessedTime,\n\t\tEmployee_ID = csvEmployee_ID,\n\t\tSurrogate_Key = {db@Surrogate_Key}\n\t),\n\tpartitionBy('hash', 1),\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true) ~> ModifyExistingData\nSetAttributeInsertion sink(input(\n\t\tEmployee_ID as integer,\n\t\tName as string,\n\t\tMobile as decimal(10,0),\n\t\tDate_Of_Joining as string,\n\t\tisCurrent as string,\n\t\tprocessedTime as timestamp,\n\t\tSurrogate_Key as integer\n\t),\n\tallowSchemaDrift: true,\n\tvalidateSchema: false,\n\tdeletable:false,\n\tinsertable:true,\n\tupdateable:false,\n\tupsertable:false,\n\tformat: 'table',\n\tmapColumn(\n\t\tEmployee_ID = csvEmployee_ID,\n\t\tName = csvName,\n\t\tMobile = csvMobile_Number,\n\t\tDate_Of_Joining = csvJoining_Date,\n\t\tisCurrent,\n\t\tprocessedTime\n\t),\n\tpartitionBy('hash', 1),\n\tskipDuplicateMapInputs: true,\n\tskipDuplicateMapOutputs: true) ~> LoadModifiedData"
+		}
+	}
+}
